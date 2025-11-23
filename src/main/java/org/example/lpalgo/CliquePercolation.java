@@ -1,12 +1,11 @@
 package org.example.lpalgo;
 
-
-
 import java.util.*;
 
 /**
  * Clique Percolation Method Implementation
  * Uses Bron-Kerbosch algorithm to find all maximal cliques
+ * Compatible with both standalone and unified visualizer
  */
 class CliquePercolation {
     private Graph graph;
@@ -92,7 +91,10 @@ class CliquePercolation {
             toProcess.removeAll(graph.neighbors(pivot));
         }
 
-        for (int v : toProcess) {
+        // Create a copy to avoid concurrent modification
+        List<Integer> processList = new ArrayList<>(toProcess);
+
+        for (int v : processList) {
             Set<Integer> newR = new HashSet<>(R);
             newR.add(v);
 
@@ -180,6 +182,9 @@ class CliquePercolation {
         return result;
     }
 
+    /**
+     * Find all cliques of size >= k (for visualization)
+     */
     public List<Set<Integer>> findAllCliques(int k) {
         findAllMaximalCliques();
         List<Set<Integer>> result = new ArrayList<>();
@@ -191,10 +196,16 @@ class CliquePercolation {
         return result;
     }
 
+    /**
+     * Get detected communities
+     */
     public Map<Integer, Set<Integer>> getCommunities() {
         return communities;
     }
 
+    /**
+     * Check if results have been computed
+     */
     public boolean hasResults() {
         return resultsComputed;
     }
