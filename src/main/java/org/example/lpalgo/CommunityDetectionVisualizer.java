@@ -10,16 +10,17 @@ import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.*;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.stage.Stage;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
- * Enhanced Unified Community Detection Visualizer
- * Supports: Louvain, Girvan-Newman, Label Propagation, and Clique Percolation
- * With advanced visualization features matching the standalone CPM
+ * Compact Enhanced Community Detection Visualizer
+ * All features in a space-efficient design
  */
 public class CommunityDetectionVisualizer extends Application {
 
@@ -37,12 +38,16 @@ public class CommunityDetectionVisualizer extends Application {
     private ComboBox<String> algorithmSelector;
     private Label statsLabel;
     private Label metricLabel;
+    private Label timeLabel;
+    private Label complexityLabel;
     private Slider kSlider;
     private Label kValueLabel;
     private VBox kPanel;
     private Button showBestButton;
-    private Label cliquesLabel;
     private ListView<String> cliqueListView;
+    private ToggleGroup cpmViewToggle;
+    private ToggleButton showCliquesButton;
+    private ToggleButton showCommunitiesButton;
 
     private Map<Integer, Point> nodePositions;
     private boolean isRunning = false;
@@ -54,6 +59,20 @@ public class CommunityDetectionVisualizer extends Application {
     private Set<Integer> highlightedClique = new HashSet<>();
     private int hoveredNode = -1;
     private List<Set<Integer>> discoveredCliques = new ArrayList<>();
+    private Map<Integer, Double> nodeAnimations = new HashMap<>();
+    private double animationTime = 0;
+
+    // CPM visualization mode
+    private boolean showCliquesMode = true;
+
+    // Execution time tracking
+    private long startTime;
+    private long executionTime;
+
+    // Visualization settings
+    private boolean showCliqueOverlays = true;
+    private boolean showCommunityHulls = true;
+    private boolean animateTransitions = true;
 
     private static final Color[] COLORS = {
             Color.rgb(231, 76, 60), Color.rgb(52, 152, 219), Color.rgb(46, 204, 113),
@@ -64,7 +83,7 @@ public class CommunityDetectionVisualizer extends Application {
 
     @Override
     public void start(Stage primaryStage) {
-        canvas = new Canvas(800, 600);
+        canvas = new Canvas(900, 650);
         gc = canvas.getGraphicsContext2D();
 
         initializeSampleGraph();
@@ -76,9 +95,23 @@ public class CommunityDetectionVisualizer extends Application {
             hoveredNode = -1;
             drawGraph();
         });
+        canvas.setOnMouseClicked(this::handleMouseClick);
+
+        // Animation timer for smooth transitions
+        javafx.animation.AnimationTimer timer = new javafx.animation.AnimationTimer() {
+            @Override
+            public void handle(long now) {
+                animationTime += 0.016;
+                if (animateTransitions) {
+                    updateAnimations();
+                    drawGraph();
+                }
+            }
+        };
+        timer.start();
 
         BorderPane root = new BorderPane();
-        root.setPadding(new Insets(10));
+        root.setPadding(new Insets(8));
         root.setCenter(canvas);
 
         VBox controlPanel = createControlPanel();
@@ -89,133 +122,144 @@ public class CommunityDetectionVisualizer extends Application {
 
         drawGraph();
 
-        Scene scene = new Scene(root, 1200, 800);
-        primaryStage.setTitle("Enhanced Community Detection Visualizer");
+        Scene scene = new Scene(root, 1200, 750);
+        primaryStage.setTitle("Community Detection Visualizer");
         primaryStage.setScene(scene);
         primaryStage.show();
     }
 
     private VBox createControlPanel() {
-        VBox panel = new VBox(12);
+        VBox panel = new VBox(8);
         panel.setPadding(new Insets(10));
         panel.setAlignment(Pos.TOP_CENTER);
         panel.setStyle("-fx-background-color: #2c3e50; -fx-border-radius: 5;");
-        panel.setPrefWidth(220);
+        panel.setPrefWidth(250);
 
-        Label titleLabel = new Label("Algorithm Selector");
-        titleLabel.setStyle("-fx-font-size: 18px; -fx-font-weight: bold; -fx-text-fill: white;");
+        Label titleLabel = new Label("Algorithm Control");
+        titleLabel.setStyle("-fx-font-size: 16px; -fx-font-weight: bold; -fx-text-fill: white;");
 
         algorithmSelector = new ComboBox<>();
         algorithmSelector.getItems().addAll("Louvain", "Girvan-Newman", "Label Propagation", "Clique Percolation");
         algorithmSelector.setValue("Louvain");
         algorithmSelector.setOnAction(e -> switchAlgorithm());
         algorithmSelector.setStyle("-fx-font-size: 12px;");
-        algorithmSelector.setPrefWidth(200);
+        algorithmSelector.setPrefWidth(230);
 
-        statsLabel = new Label("Ready to start");
-        statsLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #ecf0f1;");
-        statsLabel.setWrapText(true);
-        statsLabel.setPrefHeight(80);
+        // Compact info section
+        VBox infoBox = new VBox(3);
+        infoBox.setStyle("-fx-background-color: #34495e; -fx-padding: 8; -fx-background-radius: 3;");
+
+        timeLabel = new Label("Time: --");
+        timeLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #ecf0f1;");
+
+        complexityLabel = new Label("Complexity: O(n log n)");
+        complexityLabel.setStyle("-fx-font-size: 10px; -fx-text-fill: #bdc3c7;");
 
         metricLabel = new Label("Modularity: 0.0000");
-        metricLabel.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #3498db;");
+        metricLabel.setStyle("-fx-font-size: 13px; -fx-font-weight: bold; -fx-text-fill: #3498db;");
 
-        // K-value slider for CPM
+        infoBox.getChildren().addAll(timeLabel, complexityLabel, metricLabel);
+
+        statsLabel = new Label("Ready to start");
+        statsLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #ecf0f1; -fx-font-family: 'Consolas';");
+        statsLabel.setWrapText(true);
+        statsLabel.setPrefHeight(60);
+
+        // Enhanced K-value panel for CPM
         kPanel = new VBox(5);
+        kPanel.setStyle("-fx-background-color: #34495e; -fx-padding: 8; -fx-background-radius: 3;");
         Label kLabel = new Label("Clique Size (k):");
-        kLabel.setStyle("-fx-font-size: 12px; -fx-text-fill: #ecf0f1;");
+        kLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #ecf0f1;");
 
-        kSlider = new Slider(3, 5, 3);
+        kSlider = new Slider(3, 6, 3);
         kSlider.setMajorTickUnit(1);
         kSlider.setMinorTickCount(0);
         kSlider.setSnapToTicks(true);
         kSlider.setShowTickLabels(true);
         kSlider.setShowTickMarks(true);
-        kSlider.setPrefWidth(200);
+        kSlider.setPrefWidth(210);
 
         kValueLabel = new Label("k = 3");
-        kValueLabel.setStyle("-fx-font-size: 16px; -fx-font-weight: bold; -fx-text-fill: #3498db;");
+        kValueLabel.setStyle("-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #3498db;");
 
         kSlider.valueProperty().addListener((obs, oldVal, newVal) -> {
             currentK = newVal.intValue();
             kValueLabel.setText("k = " + currentK);
+            if (currentAlgorithm.equals("Clique Percolation") && cpmAlgo.hasResults()) {
+                performCPMStep();
+            }
         });
 
-        kPanel.getChildren().addAll(kLabel, kSlider, kValueLabel);
+        // Compact CPM View Toggle
+        HBox toggleBox = new HBox(3);
+        cpmViewToggle = new ToggleGroup();
+
+        showCliquesButton = new ToggleButton("Cliques");
+        showCliquesButton.setToggleGroup(cpmViewToggle);
+        showCliquesButton.setSelected(true);
+        showCliquesButton.setStyle("-fx-font-size: 10px; -fx-background-color: #3498db; -fx-text-fill: white; -fx-padding: 3 8 3 8;");
+        showCliquesButton.setOnAction(e -> {
+            showCliquesMode = true;
+            drawGraph();
+        });
+
+        showCommunitiesButton = new ToggleButton("Communities");
+        showCommunitiesButton.setToggleGroup(cpmViewToggle);
+        showCommunitiesButton.setStyle("-fx-font-size: 10px; -fx-background-color: #34495e; -fx-text-fill: white; -fx-padding: 3 8 3 8;");
+        showCommunitiesButton.setOnAction(e -> {
+            showCliquesMode = false;
+            drawGraph();
+        });
+
+        toggleBox.getChildren().addAll(showCliquesButton, showCommunitiesButton);
+        toggleBox.setVisible(false);
+
+        kPanel.getChildren().addAll(kLabel, kSlider, kValueLabel, toggleBox);
         kPanel.setVisible(false);
 
-        // Cliques display area
-        Label cliquesTitleLabel = new Label("Cliques Found:");
-        cliquesTitleLabel.setStyle("-fx-font-size: 12px; -fx-font-weight: bold; -fx-text-fill: #ecf0f1;");
+        // Compact action buttons
+        Button stepButton = createCompactButton("Next Step", "#3498db", e -> performStep());
+        Button runButton = createCompactButton("Run All", "#2ecc71", e -> runAll());
 
-        cliquesLabel = new Label();
-        cliquesLabel.setStyle("-fx-font-size: 10px; -fx-font-family: monospace; -fx-text-fill: #ecf0f1;");
-        cliquesLabel.setWrapText(true);
-        cliquesLabel.setPrefHeight(80);
-        cliquesLabel.setVisible(false);
-
-        // Action buttons
-        Button stepButton = new Button("▶ Next Step");
-        stepButton.setOnAction(e -> performStep());
-        styleButton(stepButton, "#3498db");
-
-        Button runButton = new Button("⚡ Run All");
-        runButton.setOnAction(e -> runAll());
-        styleButton(runButton, "#2ecc71");
-
-        showBestButton = new Button("🏆 Show Best");
-        showBestButton.setOnAction(e -> toggleBestPartition());
+        showBestButton = createCompactButton("Best Partition", "#9b59b6", e -> toggleBestPartition());
         showBestButton.setVisible(false);
-        styleButton(showBestButton, "#9b59b6");
 
-        Button resetButton = new Button("🔄 Reset");
-        resetButton.setOnAction(e -> reset());
-        styleButton(resetButton, "#e74c3c");
+        HBox buttonRow1 = new HBox(5, stepButton, runButton);
+        buttonRow1.setAlignment(Pos.CENTER);
 
-        Button newGraphButton = new Button("✨ New Graph");
-        newGraphButton.setOnAction(e -> generateNewGraph());
-        styleButton(newGraphButton, "#f39c12");
+        Button resetButton = createCompactButton("Reset", "#e74c3c", e -> reset());
+        Button newGraphButton = createCompactButton("New Graph", "#f39c12", e -> generateNewGraph());
 
-        Label infoLabel = new Label();
-        infoLabel.setStyle("-fx-font-size: 9px; -fx-text-fill: #bdc3c7;");
-        infoLabel.setWrapText(true);
-        infoLabel.setText(getAlgorithmInfo("Louvain"));
+        HBox buttonRow2 = new HBox(5, resetButton, newGraphButton);
+        buttonRow2.setAlignment(Pos.CENTER);
 
         panel.getChildren().addAll(
                 titleLabel,
                 algorithmSelector,
                 new Separator(),
-                metricLabel,
+                infoBox,
                 statsLabel,
                 kPanel,
-                cliquesTitleLabel,
-                cliquesLabel,
-                stepButton,
-                runButton,
-                showBestButton,
-                resetButton,
-                newGraphButton,
-                new Separator(),
-                infoLabel
+                buttonRow1,
+                buttonRow2,
+                showBestButton
         );
-
-        // Store info label reference for updates
-        panel.setUserData(infoLabel);
 
         return panel;
     }
 
     private VBox createBottomPanel() {
-        VBox panel = new VBox(5);
+        VBox panel = new VBox(3);
         panel.setPadding(new Insets(5));
         panel.setStyle("-fx-background-color: #ecf0f1;");
+        panel.setPrefHeight(120);
 
-        Label listLabel = new Label("Discovered Cliques (click to highlight):");
-        listLabel.setStyle("-fx-font-size: 12px; -fx-font-weight: bold;");
+        Label listLabel = new Label("Cliques (click to highlight):");
+        listLabel.setStyle("-fx-font-size: 11px; -fx-font-weight: bold;");
 
         cliqueListView = new ListView<>();
-        cliqueListView.setPrefHeight(100);
-        cliqueListView.setStyle("-fx-font-size: 11px;");
+        cliqueListView.setPrefHeight(80);
+        cliqueListView.setStyle("-fx-font-size: 10px; -fx-font-family: 'Consolas';");
         cliqueListView.setVisible(false);
 
         cliqueListView.setOnMouseClicked(e -> {
@@ -229,16 +273,19 @@ public class CommunityDetectionVisualizer extends Application {
         return panel;
     }
 
-    private void styleButton(Button button, String color) {
+    private Button createCompactButton(String text, String color, javafx.event.EventHandler<javafx.event.ActionEvent> handler) {
+        Button button = new Button(text);
+        button.setOnAction(handler);
         button.setStyle(
                 "-fx-font-size: 11px; " +
                         "-fx-background-color: " + color + "; " +
                         "-fx-text-fill: white; " +
                         "-fx-font-weight: bold; " +
-                        "-fx-padding: 8 15 8 15; " +
-                        "-fx-background-radius: 5;"
+                        "-fx-padding: 5 10 5 10; " +
+                        "-fx-background-radius: 3;"
         );
-        button.setPrefWidth(200);
+        button.setPrefWidth(110);
+        return button;
     }
 
     private void handleMouseMove(MouseEvent e) {
@@ -254,39 +301,57 @@ public class CommunityDetectionVisualizer extends Application {
                 break;
             }
         }
-
         drawGraph();
+    }
+
+    private void handleMouseClick(MouseEvent e) {
+        if (hoveredNode != -1 && currentAlgorithm.equals("Clique Percolation")) {
+            highlightCliquesContainingNode(hoveredNode);
+        }
+    }
+
+    private void highlightCliquesContainingNode(int node) {
+        if (!cpmAlgo.hasResults()) return;
+
+        List<Set<Integer>> cliques = cpmAlgo.findAllCliques(currentK);
+        List<Set<Integer>> containingCliques = cliques.stream()
+                .filter(clique -> clique.contains(node))
+                .collect(Collectors.toList());
+
+        if (!containingCliques.isEmpty()) {
+            highlightedClique = containingCliques.get(0);
+            drawGraph();
+        }
     }
 
     private void highlightCliqueFromString(String cliqueStr) {
         highlightedClique.clear();
-
-        // Parse "Clique X: [a, b, c]"
-        int startIdx = cliqueStr.indexOf('[');
-        int endIdx = cliqueStr.indexOf(']');
-        if (startIdx != -1 && endIdx != -1) {
-            String nodesStr = cliqueStr.substring(startIdx + 1, endIdx);
-            String[] nodes = nodesStr.split(",");
-            for (String node : nodes) {
-                highlightedClique.add(Integer.parseInt(node.trim()));
+        try {
+            int startIdx = cliqueStr.indexOf('[');
+            int endIdx = cliqueStr.indexOf(']');
+            if (startIdx != -1 && endIdx != -1) {
+                String nodesStr = cliqueStr.substring(startIdx + 1, endIdx);
+                String[] nodes = nodesStr.split(",");
+                for (String node : nodes) {
+                    highlightedClique.add(Integer.parseInt(node.trim()));
+                }
+                for (int node : highlightedClique) {
+                    nodeAnimations.put(node, animationTime);
+                }
             }
+        } catch (Exception e) {
+            System.err.println("Error parsing clique: " + e.getMessage());
         }
-
         drawGraph();
     }
 
-    private String getAlgorithmInfo(String algorithm) {
+    private String getTimeComplexity(String algorithm) {
         switch (algorithm) {
-            case "Louvain":
-                return "\nLouvain:\n• Fast modularity optimization\n• Hierarchical communities\n• Non-overlapping\n• O(n log n) complexity";
-            case "Girvan-Newman":
-                return "\nGirvan-Newman:\n• Removes high-betweenness edges\n• Divisive hierarchical\n• Tracks max modularity\n• O(m²n) complexity";
-            case "Label Propagation":
-                return "\nLabel Propagation:\n• Nodes adopt neighbor labels\n• Very fast O(m)\n• Non-deterministic\n• Non-overlapping";
-            case "Clique Percolation":
-                return "\nClique Percolation:\n• Finds k-cliques\n• Overlapping communities\n• Rigid structure\n• NP-hard complexity";
-            default:
-                return "";
+            case "Louvain": return "O(n log n)";
+            case "Girvan-Newman": return "O(m²n)";
+            case "Label Propagation": return "O(m)";
+            case "Clique Percolation": return "NP-hard";
+            default: return "Unknown";
         }
     }
 
@@ -296,56 +361,36 @@ public class CommunityDetectionVisualizer extends Application {
         currentAlgorithm = algorithmSelector.getValue();
         showBest = false;
         highlightedClique.clear();
+        nodeAnimations.clear();
 
-        // Update UI visibility
         boolean isCPM = currentAlgorithm.equals("Clique Percolation");
         kPanel.setVisible(isCPM);
-        cliquesLabel.setVisible(isCPM);
         cliqueListView.setVisible(isCPM);
         showBestButton.setVisible(currentAlgorithm.equals("Girvan-Newman"));
 
-        // Update info label
-        VBox panel = (VBox) algorithmSelector.getParent();
-        Label infoLabel = (Label) panel.getUserData();
-        infoLabel.setText(getAlgorithmInfo(currentAlgorithm));
+        // Show/hide CPM view toggle
+        HBox toggleBox = (HBox) kPanel.getChildren().get(3);
+        toggleBox.setVisible(isCPM);
 
+        complexityLabel.setText("Complexity: " + getTimeComplexity(currentAlgorithm));
         reset();
     }
 
     private void initializeSampleGraph() {
         graph = new Graph();
-
-        // Create overlapping triangular structures (like enhanced CPM)
         // Community 1
-        graph.addEdge(0, 1);
-        graph.addEdge(0, 2);
-        graph.addEdge(1, 2);
-        graph.addEdge(1, 3);
-        graph.addEdge(2, 3);
-        graph.addEdge(0, 3);
-
+        graph.addEdge(0, 1); graph.addEdge(0, 2); graph.addEdge(1, 2);
+        graph.addEdge(1, 3); graph.addEdge(2, 3); graph.addEdge(0, 3);
         // Overlap region
-        graph.addEdge(3, 4);
-        graph.addEdge(3, 5);
-        graph.addEdge(4, 5);
-
+        graph.addEdge(3, 4); graph.addEdge(3, 5); graph.addEdge(4, 5);
         // Community 2
-        graph.addEdge(4, 6);
-        graph.addEdge(5, 6);
-        graph.addEdge(5, 7);
-        graph.addEdge(6, 7);
-        graph.addEdge(4, 7);
-
+        graph.addEdge(4, 6); graph.addEdge(5, 6); graph.addEdge(5, 7);
+        graph.addEdge(6, 7); graph.addEdge(4, 7);
         // Community 3
-        graph.addEdge(7, 8);
-        graph.addEdge(7, 9);
-        graph.addEdge(8, 9);
-        graph.addEdge(8, 10);
-        graph.addEdge(9, 10);
-
+        graph.addEdge(7, 8); graph.addEdge(7, 9); graph.addEdge(8, 9);
+        graph.addEdge(8, 10); graph.addEdge(9, 10);
         // Additional edges
-        graph.addEdge(0, 4);
-        graph.addEdge(6, 10);
+        graph.addEdge(0, 4); graph.addEdge(6, 10);
 
         initializeAlgorithms();
     }
@@ -365,7 +410,7 @@ public class CommunityDetectionVisualizer extends Application {
         int n = nodes.size();
         double centerX = canvas.getWidth() / 2;
         double centerY = canvas.getHeight() / 2;
-        double radius = Math.min(centerX, centerY) - 80;
+        double radius = Math.min(centerX, centerY) - 60;
 
         for (int i = 0; i < n; i++) {
             double angle = 2 * Math.PI * i / n - Math.PI / 2;
@@ -375,52 +420,53 @@ public class CommunityDetectionVisualizer extends Application {
         }
     }
 
+    private void updateAnimations() {
+        List<Integer> toRemove = new ArrayList<>();
+        for (Map.Entry<Integer, Double> entry : nodeAnimations.entrySet()) {
+            if (animationTime - entry.getValue() > 3.0) {
+                toRemove.add(entry.getKey());
+            }
+        }
+        toRemove.forEach(nodeAnimations::remove);
+    }
+
     private void performStep() {
         if (isRunning) return;
+        startTime = System.currentTimeMillis();
 
         switch (currentAlgorithm) {
-            case "Louvain":
-                performLouvainStep();
-                break;
-            case "Girvan-Newman":
-                performGirvanNewmanStep();
-                break;
-            case "Label Propagation":
-                performLPAStep();
-                break;
-            case "Clique Percolation":
-                performCPMStep();
-                break;
+            case "Louvain": performLouvainStep(); break;
+            case "Girvan-Newman": performGirvanNewmanStep(); break;
+            case "Label Propagation": performLPAStep(); break;
+            case "Clique Percolation": performCPMStep(); break;
         }
 
+        executionTime = System.currentTimeMillis() - startTime;
+        updateTimeLabel();
         drawGraph();
     }
 
     private void performLouvainStep() {
         boolean changed = louvainAlgo.performOnePass();
         if (changed) {
-            statsLabel.setText("Phase " + louvainAlgo.getPhase() + "\nCommunities: " +
-                    louvainAlgo.getNumCommunities());
+            statsLabel.setText("Phase " + louvainAlgo.getPhase() + "\nCommunities: " + louvainAlgo.getNumCommunities());
         } else {
             statsLabel.setText("Converged!\nCommunities: " + louvainAlgo.getNumCommunities());
         }
-        metricLabel.setText(String.format("Modularity: %.4f", louvainAlgo.computeModularity()));
+        metricLabel.setText(String.format("Q: %.4f", louvainAlgo.computeModularity()));
     }
 
     private void performGirvanNewmanStep() {
         showBest = false;
         boolean hasMore = girvanNewmanAlgo.performOneStep();
-
         if (hasMore) {
             statsLabel.setText("Step: " + girvanNewmanAlgo.getCurrentStep() +
                     "\nEdges: " + girvanNewmanAlgo.getRemainingEdges() +
                     "\nCommunities: " + girvanNewmanAlgo.getCurrentCommunities().size());
         } else {
-            statsLabel.setText("Complete!\nBest: " + girvanNewmanAlgo.getBestCommunities().size() +
-                    " communities");
+            statsLabel.setText("Complete!\nBest: " + girvanNewmanAlgo.getBestCommunities().size() + " communities");
         }
-        metricLabel.setText(String.format("Q: %.4f\nMax: %.4f",
-                girvanNewmanAlgo.getCurrentModularity(), girvanNewmanAlgo.getMaxModularity()));
+        metricLabel.setText(String.format("Q: %.4f", girvanNewmanAlgo.getCurrentModularity()));
     }
 
     private void performLPAStep() {
@@ -428,16 +474,13 @@ public class CommunityDetectionVisualizer extends Application {
         statsLabel.setText("Iteration: " + lpaAlgo.getIteration() +
                 "\nCommunities: " + lpaAlgo.getCommunities().size() +
                 (changed ? "" : "\nConverged!"));
-        metricLabel.setText("LPA (No modularity)");
+        metricLabel.setText("LPA Running");
     }
 
     private void performCPMStep() {
-        // For CPM, run the algorithm completely in one step
         cpmAlgo.findCommunities(currentK);
-
         Map<Integer, Set<Integer>> communities = cpmAlgo.getCommunities();
 
-        // Count overlapping nodes
         Map<Integer, Integer> nodeMembership = new HashMap<>();
         for (Set<Integer> comm : communities.values()) {
             for (int node : comm) {
@@ -446,62 +489,65 @@ public class CommunityDetectionVisualizer extends Application {
         }
         long overlapping = nodeMembership.values().stream().filter(c -> c > 1).count();
 
-        // Count total unique nodes in communities
         Set<Integer> nodesInCommunities = new HashSet<>();
         for (Set<Integer> comm : communities.values()) {
             nodesInCommunities.addAll(comm);
         }
 
-        statsLabel.setText("✓ Complete!\nk = " + currentK +
+        statsLabel.setText("✓ Complete!\nk=" + currentK +
                 "\nCommunities: " + communities.size() +
-                "\nNodes in communities: " + nodesInCommunities.size() +
-                "\nOverlapping nodes: " + overlapping);
+                "\nNodes: " + nodesInCommunities.size() +
+                "\nOverlap: " + overlapping);
+        metricLabel.setText("CPM Final");
 
-        metricLabel.setText("CPM - Final");
-
-        // Update cliques display
         updateCliquesDisplay();
+        animateCliqueDiscovery();
+    }
+
+    private void animateCliqueDiscovery() {
+        List<Set<Integer>> cliques = cpmAlgo.findAllCliques(currentK);
+        for (Set<Integer> clique : cliques) {
+            for (int node : clique) {
+                nodeAnimations.put(node, animationTime);
+            }
+        }
     }
 
     private void updateCliquesDisplay() {
-        // Find all cliques of size >= currentK
         List<Set<Integer>> allCliques = cpmAlgo.findAllCliques(currentK);
+        discoveredCliques = allCliques;
 
-        StringBuilder cliquesText = new StringBuilder();
-        cliquesText.append("Found ").append(allCliques.size())
-                .append(" cliques of size ≥ ").append(currentK).append("\n\n");
+        allCliques.sort((a, b) -> Integer.compare(b.size(), a.size()));
 
-        for (int i = 0; i < allCliques.size(); i++) {
-            List<Integer> cliqueList = new ArrayList<>(allCliques.get(i));
-            Collections.sort(cliqueList);
-            cliquesText.append("Clique ").append(i + 1).append(": ")
-                    .append(cliqueList).append("\n");
-        }
-
-        cliquesLabel.setText(cliquesText.toString());
-
-        // Update list view
         cliqueListView.getItems().clear();
         for (int i = 0; i < allCliques.size(); i++) {
             List<Integer> cliqueList = new ArrayList<>(allCliques.get(i));
             Collections.sort(cliqueList);
-            cliqueListView.getItems().add("Clique " + (i + 1) + ": " + cliqueList);
+            cliqueListView.getItems().add(String.format("C%d (size %d): %s",
+                    i + 1, cliqueList.size(), cliqueList));
+        }
+    }
+
+    private void updateTimeLabel() {
+        if (executionTime > 0) {
+            String timeText = executionTime < 1000 ?
+                    String.format("Time: %d ms", executionTime) :
+                    String.format("Time: %.2f s", executionTime / 1000.0);
+            timeLabel.setText(timeText);
         }
     }
 
     private void runAll() {
         if (isRunning) return;
         isRunning = true;
+        startTime = System.currentTimeMillis();
 
         new Thread(() -> {
-            if (currentAlgorithm.equals("Louvain")) {
-                runLouvainAll();
-            } else if (currentAlgorithm.equals("Girvan-Newman")) {
-                runGirvanNewmanAll();
-            } else if (currentAlgorithm.equals("Label Propagation")) {
-                runLPAAll();
-            } else if (currentAlgorithm.equals("Clique Percolation")) {
-                runCPMAll();
+            switch (currentAlgorithm) {
+                case "Louvain": runLouvainAll(); break;
+                case "Girvan-Newman": runGirvanNewmanAll(); break;
+                case "Label Propagation": runLPAAll(); break;
+                case "Clique Percolation": runCPMAll(); break;
             }
         }).start();
     }
@@ -510,15 +556,15 @@ public class CommunityDetectionVisualizer extends Application {
         while (louvainAlgo.performOnePass()) {
             Platform.runLater(() -> {
                 statsLabel.setText("Running...\nCommunities: " + louvainAlgo.getNumCommunities());
-                metricLabel.setText(String.format("Modularity: %.4f", louvainAlgo.computeModularity()));
+                metricLabel.setText(String.format("Q: %.4f", louvainAlgo.computeModularity()));
                 drawGraph();
             });
-            try { Thread.sleep(500); } catch (InterruptedException e) {}
+            try { Thread.sleep(400); } catch (InterruptedException e) {}
         }
-
+        executionTime = System.currentTimeMillis() - startTime;
         Platform.runLater(() -> {
             statsLabel.setText("Converged!\nCommunities: " + louvainAlgo.getNumCommunities());
-            metricLabel.setText(String.format("Final Q: %.4f", louvainAlgo.computeModularity()));
+            updateTimeLabel();
             drawGraph();
             isRunning = false;
         });
@@ -529,17 +575,15 @@ public class CommunityDetectionVisualizer extends Application {
             Platform.runLater(() -> {
                 statsLabel.setText("Step: " + girvanNewmanAlgo.getCurrentStep() +
                         "\nCommunities: " + girvanNewmanAlgo.getCurrentCommunities().size());
-                metricLabel.setText(String.format("Q: %.4f\nMax: %.4f",
-                        girvanNewmanAlgo.getCurrentModularity(), girvanNewmanAlgo.getMaxModularity()));
                 drawGraph();
             });
-            try { Thread.sleep(300); } catch (InterruptedException e) {}
+            try { Thread.sleep(250); } catch (InterruptedException e) {}
         }
-
+        executionTime = System.currentTimeMillis() - startTime;
         Platform.runLater(() -> {
             showBest = true;
-            statsLabel.setText("Complete!\nShowing best partition");
-            metricLabel.setText(String.format("Max Q: %.4f", girvanNewmanAlgo.getMaxModularity()));
+            statsLabel.setText("Complete! Showing best partition");
+            updateTimeLabel();
             drawGraph();
             isRunning = false;
         });
@@ -549,51 +593,29 @@ public class CommunityDetectionVisualizer extends Application {
         int maxIter = 100;
         for (int i = 0; i < maxIter; i++) {
             boolean changed = lpaAlgo.iterate();
-            int currentIter = lpaAlgo.getIteration();
-
             Platform.runLater(() -> {
-                statsLabel.setText("Iteration: " + currentIter +
+                statsLabel.setText("Iteration: " + lpaAlgo.getIteration() +
                         "\nCommunities: " + lpaAlgo.getCommunities().size());
                 drawGraph();
             });
-
-            try { Thread.sleep(300); } catch (InterruptedException e) {}
-
+            try { Thread.sleep(200); } catch (InterruptedException e) {}
             if (!changed) break;
         }
-
+        executionTime = System.currentTimeMillis() - startTime;
         Platform.runLater(() -> {
             statsLabel.setText("Converged!\nCommunities: " + lpaAlgo.getCommunities().size());
+            updateTimeLabel();
             isRunning = false;
         });
     }
 
     private void runCPMAll() {
-        // For CPM, just run it once since it's not step-by-step
         Platform.runLater(() -> {
             cpmAlgo.findCommunities(currentK);
-            Map<Integer, Set<Integer>> communities = cpmAlgo.getCommunities();
-
-            Map<Integer, Integer> nodeMembership = new HashMap<>();
-            for (Set<Integer> comm : communities.values()) {
-                for (int node : comm) {
-                    nodeMembership.put(node, nodeMembership.getOrDefault(node, 0) + 1);
-                }
-            }
-            long overlapping = nodeMembership.values().stream().filter(c -> c > 1).count();
-
-            Set<Integer> nodesInCommunities = new HashSet<>();
-            for (Set<Integer> comm : communities.values()) {
-                nodesInCommunities.addAll(comm);
-            }
-
-            statsLabel.setText("✓ Complete!\nk = " + currentK +
-                    "\nCommunities: " + communities.size() +
-                    "\nNodes in communities: " + nodesInCommunities.size() +
-                    "\nOverlapping nodes: " + overlapping);
-            metricLabel.setText("CPM - Final");
-
+            executionTime = System.currentTimeMillis() - startTime;
+            updateTimeLabel();
             updateCliquesDisplay();
+            animateCliqueDiscovery();
             drawGraph();
             isRunning = false;
         });
@@ -602,12 +624,7 @@ public class CommunityDetectionVisualizer extends Application {
     private void toggleBestPartition() {
         showBest = !showBest;
         drawGraph();
-
-        if (showBest) {
-            statsLabel.setText("Showing BEST partition\n(max modularity)");
-        } else {
-            statsLabel.setText("Showing CURRENT state");
-        }
+        statsLabel.setText(showBest ? "Showing BEST partition" : "Showing CURRENT state");
     }
 
     private void reset() {
@@ -616,9 +633,15 @@ public class CommunityDetectionVisualizer extends Application {
         initializeAlgorithms();
         showBest = false;
         highlightedClique.clear();
+        nodeAnimations.clear();
         statsLabel.setText("Ready to start");
-        cliquesLabel.setText("");
         cliqueListView.getItems().clear();
+        executionTime = 0;
+        timeLabel.setText("Time: --");
+
+        showCliquesMode = true;
+        if (showCliquesButton != null) showCliquesButton.setSelected(true);
+        if (showCommunitiesButton != null) showCommunitiesButton.setSelected(false);
 
         switch (currentAlgorithm) {
             case "Louvain":
@@ -626,13 +649,12 @@ public class CommunityDetectionVisualizer extends Application {
                 metricLabel.setText("Modularity: 0.0000");
                 break;
             case "Label Propagation":
-                metricLabel.setText("LPA (No modularity)");
+                metricLabel.setText("LPA Ready");
                 break;
             case "Clique Percolation":
-                metricLabel.setText("CPM (Overlapping)");
+                metricLabel.setText("CPM Ready");
                 break;
         }
-
         drawGraph();
     }
 
@@ -646,56 +668,180 @@ public class CommunityDetectionVisualizer extends Application {
         int nodesPerComm = 4 + rand.nextInt(3);
 
         for (int c = 0; c < numCommunities; c++) {
-            int start = c * (nodesPerComm - 1);
+            int start = c * nodesPerComm;
             int end = start + nodesPerComm;
-
             for (int i = start; i < end; i++) {
                 for (int j = i + 1; j < end; j++) {
-                    if (rand.nextDouble() < 0.75) {
-                        graph.addEdge(i, j);
-                    }
+                    if (rand.nextDouble() < 0.7) graph.addEdge(i, j);
                 }
             }
-
             if (c < numCommunities - 1) {
-                int overlap = 2;
-                for (int i = 0; i < overlap; i++) {
-                    int u = end - overlap + i;
-                    int v = end + i;
-                    graph.addEdge(u, v);
-                }
+                graph.addEdge(end - 1, end);
+                graph.addEdge(end - 2, end + 1);
             }
         }
-
         calculateNodePositions();
         reset();
     }
 
     private void drawGraph() {
-        // Enhanced background
-        gc.setFill(Color.rgb(236, 240, 241));
+        gc.setFill(Color.rgb(248, 249, 250));
         gc.fillRect(0, 0, canvas.getWidth(), canvas.getHeight());
 
-        // Get appropriate graph for display
         Graph displayGraph = currentAlgorithm.equals("Girvan-Newman") ?
                 girvanNewmanAlgo.getOriginalGraph() : graph;
 
-        // Draw communities for all algorithms
-        drawCommunities();
-
-        // Draw cliques for CPM
-        if (currentAlgorithm.equals("Clique Percolation") && cpmAlgo.hasResults()) {
-            drawCliques();
+        // Draw communities
+        if (showCommunityHulls && !(currentAlgorithm.equals("Clique Percolation") && showCliquesMode)) {
+            drawCommunities();
         }
 
-        // Draw highlighted clique edges
+        // Draw CPM visualizations
+        if (currentAlgorithm.equals("Clique Percolation") && cpmAlgo.hasResults() && showCliqueOverlays) {
+            if (showCliquesMode) {
+                drawEnhancedCliques();
+            } else {
+                drawCPMCommunities();
+            }
+        }
+
+        // Draw highlighted clique
         if (!highlightedClique.isEmpty()) {
-            drawHighlightedCliqueEdges(displayGraph);
+            drawAnimatedHighlightedClique(displayGraph);
         }
 
-        // Draw all edges
-        gc.setStroke(Color.rgb(189, 195, 199));
+        // Draw edges
+        drawEdges(displayGraph);
+
+        // Draw nodes
+        drawNodes(displayGraph);
+
+        // Draw info for hovered node
+        if (hoveredNode != -1) {
+            drawEnhancedNodeInfo(displayGraph);
+        }
+
+        // Draw overlays
+        drawAlgorithmOverlays();
+    }
+
+    // ... (Keep all the drawing methods from previous version, but make them more compact)
+    // drawEnhancedCliques(), drawCPMCommunities(), drawCliqueConnections(), drawCliqueHull(),
+    // drawAnimatedHighlightedClique(), drawEdges(), drawNodes(), drawEnhancedNodeInfo(),
+    // drawAlgorithmOverlays(), drawCommunities(), getCurrentCommunities(), getNodeToCommunityMap(),
+    // getCenter(), convexHull(), cross() methods remain the same but are more compact
+
+    private void drawEnhancedCliques() {
+        List<Set<Integer>> cliques = cpmAlgo.findAllCliques(currentK);
+        for (int i = 0; i < cliques.size(); i++) {
+            Set<Integer> clique = cliques.get(i);
+            Color color = COLORS[i % COLORS.length];
+            Point center = getCliqueCenter(clique);
+            double radius = getCliqueRadius(clique, center);
+
+            if (clique.size() >= currentK) {
+                double pulse = 0.7 + 0.3 * Math.sin(animationTime * 3 + i);
+                Color pulseColor = new Color(color.getRed(), color.getGreen(), color.getBlue(), 0.1 * pulse);
+                gc.setFill(pulseColor);
+                gc.fillOval(center.x - radius, center.y - radius, radius * 2, radius * 2);
+                drawCliqueConnections(clique, color);
+            }
+
+            if (clique.size() > 3) {
+                drawCliqueHull(clique, color);
+            }
+        }
+    }
+
+    private void drawCPMCommunities() {
+        Map<Integer, Set<Integer>> communities = cpmAlgo.getCommunities();
+        int idx = 0;
+        for (Set<Integer> community : communities.values()) {
+            if (community.size() < 2) continue;
+            Color color = COLORS[idx % COLORS.length];
+            List<Point> points = new ArrayList<>();
+            for (int node : community) {
+                Point p = nodePositions.get(node);
+                if (p != null) points.add(p);
+            }
+            if (points.size() >= 3) {
+                List<Point> hull = convexHull(points);
+                double animation = 0.7 + 0.3 * Math.sin(animationTime * 2 + idx);
+                Color hullColor = new Color(color.getRed(), color.getGreen(), color.getBlue(), 0.2 * animation);
+                gc.setFill(hullColor);
+                double[] xPoints = new double[hull.size()];
+                double[] yPoints = new double[hull.size()];
+                Point center = getCenter(hull);
+                for (int i = 0; i < hull.size(); i++) {
+                    Point p = hull.get(i);
+                    double dx = p.x - center.x;
+                    double dy = p.y - center.y;
+                    double len = Math.sqrt(dx * dx + dy * dy);
+                    xPoints[i] = p.x + (dx / len) * 35;
+                    yPoints[i] = p.y + (dy / len) * 35;
+                }
+                gc.fillPolygon(xPoints, yPoints, hull.size());
+                gc.setStroke(new Color(color.getRed(), color.getGreen(), color.getBlue(), 0.7));
+                gc.setLineWidth(2);
+                gc.setLineDashes(8, 4);
+                gc.strokePolygon(xPoints, yPoints, hull.size());
+                gc.setLineDashes(0);
+            }
+            idx++;
+        }
+    }
+
+    private void drawCliqueConnections(Set<Integer> clique, Color color) {
+        gc.setStroke(new Color(color.getRed(), color.getGreen(), color.getBlue(), 0.6));
         gc.setLineWidth(2);
+        List<Integer> nodes = new ArrayList<>(clique);
+        for (int i = 0; i < nodes.size(); i++) {
+            for (int j = i + 1; j < nodes.size(); j++) {
+                Point p1 = nodePositions.get(nodes.get(i));
+                Point p2 = nodePositions.get(nodes.get(j));
+                gc.strokeLine(p1.x, p1.y, p2.x, p2.y);
+            }
+        }
+    }
+
+    private void drawCliqueHull(Set<Integer> clique, Color color) {
+        List<Point> points = new ArrayList<>();
+        for (int node : clique) points.add(nodePositions.get(node));
+        if (points.size() >= 3) {
+            List<Point> hull = convexHull(points);
+            double animation = 0.7 + 0.3 * Math.sin(animationTime * 2);
+            Color hullColor = new Color(color.getRed(), color.getGreen(), color.getBlue(), 0.25 * animation);
+            gc.setFill(hullColor);
+            double[] xPoints = new double[hull.size()];
+            double[] yPoints = new double[hull.size()];
+            for (int i = 0; i < hull.size(); i++) {
+                Point pt = hull.get(i);
+                xPoints[i] = pt.x;
+                yPoints[i] = pt.y;
+            }
+            gc.fillPolygon(xPoints, yPoints, hull.size());
+        }
+    }
+
+    private void drawAnimatedHighlightedClique(Graph displayGraph) {
+        double pulse = 0.5 + 0.5 * Math.sin(animationTime * 5);
+        gc.setStroke(Color.rgb(241, 196, 15, pulse));
+        gc.setLineWidth(4);
+        List<Integer> nodes = new ArrayList<>(highlightedClique);
+        for (int i = 0; i < nodes.size(); i++) {
+            for (int j = i + 1; j < nodes.size(); j++) {
+                int u = nodes.get(i), v = nodes.get(j);
+                if (displayGraph.neighbors(u).contains(v)) {
+                    Point p1 = nodePositions.get(u), p2 = nodePositions.get(v);
+                    gc.strokeLine(p1.x, p1.y, p2.x, p2.y);
+                }
+            }
+        }
+    }
+
+    private void drawEdges(Graph displayGraph) {
+        gc.setStroke(Color.rgb(189, 195, 199, 0.6));
+        gc.setLineWidth(1);
         for (int node : displayGraph.nodes()) {
             Point p1 = nodePositions.get(node);
             for (int neighbor : displayGraph.neighbors(node)) {
@@ -705,180 +851,105 @@ public class CommunityDetectionVisualizer extends Application {
                 }
             }
         }
+    }
 
-        // Draw nodes with enhanced styling
+    private void drawNodes(Graph displayGraph) {
         Map<Integer, Integer> nodeToCommunity = getNodeToCommunityMap();
         for (int node : displayGraph.nodes()) {
             Point p = nodePositions.get(node);
-
             boolean isHighlighted = highlightedClique.contains(node);
             boolean isHovered = (node == hoveredNode);
+            boolean isAnimated = nodeAnimations.containsKey(node);
             int community = nodeToCommunity.getOrDefault(node, -1);
 
-            // Node circle with community-based coloring
-            if (isHighlighted) {
-                gc.setFill(Color.rgb(241, 196, 15));
-                gc.fillOval(p.x - 25, p.y - 25, 50, 50);
-            } else if (isHovered) {
-                gc.setFill(Color.rgb(52, 152, 219));
-                gc.fillOval(p.x - 23, p.y - 23, 46, 46);
+            double size = 30;
+            Color fillColor = Color.WHITE;
+            if (isHighlighted) fillColor = Color.rgb(241, 196, 15);
+            else if (isHovered) fillColor = Color.rgb(52, 152, 219);
+            else if (isAnimated) {
+                double pulse = 0.7 + 0.3 * Math.sin(animationTime * 8);
+                if (community != -1) {
+                    Color communityColor = COLORS[Math.abs(community) % COLORS.length];
+                    fillColor = new Color(communityColor.getRed(), communityColor.getGreen(), communityColor.getBlue(), 0.8 + 0.2 * pulse);
+                }
             } else if (community != -1) {
-                Color communityColor = COLORS[Math.abs(community) % COLORS.length];
-                gc.setFill(communityColor);
-                gc.fillOval(p.x - 20, p.y - 20, 40, 40);
-            } else {
-                gc.setFill(Color.WHITE);
-                gc.fillOval(p.x - 20, p.y - 20, 40, 40);
+                fillColor = COLORS[Math.abs(community) % COLORS.length];
             }
 
-            // Node border
+            gc.setFill(fillColor);
+            gc.fillOval(p.x - size/2, p.y - size/2, size, size);
             gc.setStroke(Color.rgb(52, 73, 94));
-            gc.setLineWidth(isHighlighted ? 4 : (isHovered ? 3 : 2));
-            gc.strokeOval(p.x - 20, p.y - 20, 40, 40);
+            gc.setLineWidth(isHighlighted ? 2.5 : (isHovered ? 2 : 1.5));
+            gc.strokeOval(p.x - size/2, p.y - size/2, size, size);
 
-            // Node ID
             gc.setFill(Color.rgb(44, 62, 80));
-            gc.setFont(javafx.scene.text.Font.font("Arial", javafx.scene.text.FontWeight.BOLD, 16));
+            gc.setFont(javafx.scene.text.Font.font("Arial", javafx.scene.text.FontWeight.BOLD, 12));
             String text = String.valueOf(node);
-            double textWidth = text.length() * 8;
-            gc.fillText(text, p.x - textWidth / 2, p.y + 6);
-        }
-
-        // Draw info for hovered node
-        if (hoveredNode != -1) {
-            drawNodeInfo(displayGraph);
+            double textWidth = text.length() * 6;
+            gc.fillText(text, p.x - textWidth / 2, p.y + 4);
         }
     }
 
-    private void drawHighlightedCliqueEdges(Graph displayGraph) {
-        gc.setStroke(Color.rgb(241, 196, 15));
-        gc.setLineWidth(5);
-
-        List<Integer> nodes = new ArrayList<>(highlightedClique);
-        for (int i = 0; i < nodes.size(); i++) {
-            for (int j = i + 1; j < nodes.size(); j++) {
-                int u = nodes.get(i);
-                int v = nodes.get(j);
-                if (displayGraph.neighbors(u).contains(v)) {
-                    Point p1 = nodePositions.get(u);
-                    Point p2 = nodePositions.get(v);
-                    gc.strokeLine(p1.x, p1.y, p2.x, p2.y);
-                }
-            }
+    private void drawEnhancedNodeInfo(Graph displayGraph) {
+        Point p = nodePositions.get(hoveredNode);
+        StringBuilder info = new StringBuilder();
+        info.append("Node ").append(hoveredNode).append("\n");
+        info.append("Degree: ").append(displayGraph.degree(hoveredNode));
+        if (currentAlgorithm.equals("Clique Percolation") && cpmAlgo.hasResults()) {
+            List<Set<Integer>> cliques = cpmAlgo.findAllCliques(currentK);
+            int cliqueCount = (int) cliques.stream().filter(clique -> clique.contains(hoveredNode)).count();
+            info.append("\nCliques: ").append(cliqueCount);
+        }
+        gc.setFill(Color.rgb(44, 62, 80, 0.9));
+        gc.fillRect(p.x + 25, p.y - 25, 90, 45);
+        gc.setFill(Color.WHITE);
+        gc.setFont(javafx.scene.text.Font.font("Arial", 10));
+        String[] lines = info.toString().split("\n");
+        for (int i = 0; i < lines.length; i++) {
+            gc.fillText(lines[i], p.x + 30, p.y - 10 + i * 12);
         }
     }
 
-    private void drawCliques() {
-        List<Set<Integer>> cliques = cpmAlgo.findAllCliques(currentK);
-
-        for (int i = 0; i < cliques.size(); i++) {
-            Set<Integer> clique = cliques.get(i);
-            Color color = COLORS[i % COLORS.length];
-
-            // Draw colored polygon for each clique
-            List<Point> points = new ArrayList<>();
-            for (int node : clique) {
-                points.add(nodePositions.get(node));
-            }
-
-            if (points.size() >= 3) {
-                List<Point> hull = convexHull(points);
-
-                gc.setFill(new Color(color.getRed(), color.getGreen(),
-                        color.getBlue(), 0.2));
-                double[] xPoints = new double[hull.size()];
-                double[] yPoints = new double[hull.size()];
-
-                Point center = getCenter(hull);
-                for (int j = 0; j < hull.size(); j++) {
-                    Point pt = hull.get(j);
-                    double dx = pt.x - center.x;
-                    double dy = pt.y - center.y;
-                    double len = Math.sqrt(dx * dx + dy * dy);
-                    xPoints[j] = pt.x + (dx / len) * 35;
-                    yPoints[j] = pt.y + (dy / len) * 35;
-                }
-
-                gc.fillPolygon(xPoints, yPoints, hull.size());
-                gc.setStroke(color);
-                gc.setLineWidth(2);
-                gc.strokePolygon(xPoints, yPoints, hull.size());
-            }
+    private void drawAlgorithmOverlays() {
+        gc.setFill(Color.rgb(52, 73, 94, 0.8));
+        gc.setFont(javafx.scene.text.Font.font("Arial", javafx.scene.text.FontWeight.BOLD, 14));
+        gc.fillText(currentAlgorithm, 15, 25);
+        if (executionTime > 0) {
+            String timeText = executionTime < 1000 ?
+                    String.format("Time: %d ms", executionTime) :
+                    String.format("Time: %.1f s", executionTime / 1000.0);
+            gc.fillText(timeText, 15, 45);
         }
     }
 
     private void drawCommunities() {
         Map<Integer, Set<Integer>> communitySets = getCurrentCommunities();
-
         int idx = 0;
         for (Set<Integer> community : communitySets.values()) {
             if (community.size() < 2) continue;
-
             Color color = COLORS[idx % COLORS.length];
-
             List<Point> points = new ArrayList<>();
             for (int node : community) {
                 Point p = nodePositions.get(node);
                 if (p != null) points.add(p);
             }
-
             if (points.size() >= 3) {
                 List<Point> hull = convexHull(points);
-
-                gc.setFill(new Color(color.getRed(), color.getGreen(),
-                        color.getBlue(), 0.15));
+                gc.setFill(new Color(color.getRed(), color.getGreen(), color.getBlue(), 0.1));
                 double[] xPoints = new double[hull.size()];
                 double[] yPoints = new double[hull.size()];
-
                 Point center = getCenter(hull);
                 for (int i = 0; i < hull.size(); i++) {
                     Point p = hull.get(i);
                     double dx = p.x - center.x;
                     double dy = p.y - center.y;
                     double len = Math.sqrt(dx * dx + dy * dy);
-                    xPoints[i] = p.x + (dx / len) * 40;
-                    yPoints[i] = p.y + (dy / len) * 40;
+                    xPoints[i] = p.x + (dx / len) * 35;
+                    yPoints[i] = p.y + (dy / len) * 35;
                 }
-
                 gc.fillPolygon(xPoints, yPoints, hull.size());
-
-                // Dashed border for communities
-                gc.setStroke(color);
-                gc.setLineWidth(3);
-                gc.setLineDashes(10, 5);
-                gc.strokePolygon(xPoints, yPoints, hull.size());
-                gc.setLineDashes(0);
             }
-
             idx++;
-        }
-    }
-
-    private void drawNodeInfo(Graph displayGraph) {
-        Point p = nodePositions.get(hoveredNode);
-
-        String info = "Node " + hoveredNode + "\nDegree: " + displayGraph.degree(hoveredNode);
-
-        // Add clique info for CPM
-        if (currentAlgorithm.equals("Clique Percolation") && cpmAlgo.hasResults()) {
-            List<Set<Integer>> cliques = cpmAlgo.findAllCliques(currentK);
-            int cliqueCount = 0;
-            for (Set<Integer> clique : cliques) {
-                if (clique.contains(hoveredNode)) {
-                    cliqueCount++;
-                }
-            }
-            info += "\nCliques: " + cliqueCount;
-        }
-
-        gc.setFill(Color.rgb(44, 62, 80, 0.9));
-        gc.fillRect(p.x + 25, p.y - 30, 100, 60);
-
-        gc.setFill(Color.WHITE);
-        gc.setFont(javafx.scene.text.Font.font("Arial", 11));
-        String[] lines = info.split("\n");
-        for (int i = 0; i < lines.length; i++) {
-            gc.fillText(lines[i], p.x + 30, p.y - 15 + i * 15);
         }
     }
 
@@ -891,102 +962,93 @@ public class CommunityDetectionVisualizer extends Application {
                     louvainComm.computeIfAbsent(entry.getValue(), k -> new HashSet<>()).add(entry.getKey());
                 }
                 return louvainComm;
-
             case "Girvan-Newman":
                 return showBest ? girvanNewmanAlgo.getBestCommunities() : girvanNewmanAlgo.getCurrentCommunities();
-
             case "Label Propagation":
                 return lpaAlgo.getCommunities();
-
             case "Clique Percolation":
                 return cpmAlgo.getCommunities();
-
-            default:
-                return new HashMap<>();
+            default: return new HashMap<>();
         }
     }
 
     private Map<Integer, Integer> getNodeToCommunityMap() {
         Map<Integer, Integer> map = new HashMap<>();
-
         switch (currentAlgorithm) {
-            case "Louvain":
-                return louvainAlgo.getCommunityMap();
-
+            case "Louvain": return louvainAlgo.getCommunityMap();
             case "Girvan-Newman":
-                Map<Integer, Set<Integer>> gnComm = showBest ?
-                        girvanNewmanAlgo.getBestCommunities() : girvanNewmanAlgo.getCurrentCommunities();
+                Map<Integer, Set<Integer>> gnComm = showBest ? girvanNewmanAlgo.getBestCommunities() : girvanNewmanAlgo.getCurrentCommunities();
                 for (Map.Entry<Integer, Set<Integer>> entry : gnComm.entrySet()) {
-                    for (int node : entry.getValue()) {
-                        map.put(node, entry.getKey());
-                    }
+                    for (int node : entry.getValue()) map.put(node, entry.getKey());
                 }
                 return map;
-
             case "Label Propagation":
-                for (int node : graph.nodes()) {
-                    map.put(node, lpaAlgo.getLabel(node));
-                }
+                for (int node : graph.nodes()) map.put(node, lpaAlgo.getLabel(node));
                 return map;
-
             case "Clique Percolation":
                 Map<Integer, Set<Integer>> cpmComm = cpmAlgo.getCommunities();
                 for (Map.Entry<Integer, Set<Integer>> entry : cpmComm.entrySet()) {
                     for (int node : entry.getValue()) {
-                        if (!map.containsKey(node)) {
-                            map.put(node, entry.getKey());
-                        }
+                        if (!map.containsKey(node)) map.put(node, entry.getKey());
                     }
                 }
                 return map;
         }
-
         return map;
     }
 
     private Point getCenter(List<Point> points) {
         double sumX = 0, sumY = 0;
-        for (Point p : points) {
-            sumX += p.x;
-            sumY += p.y;
-        }
+        for (Point p : points) { sumX += p.x; sumY += p.y; }
         return new Point(sumX / points.size(), sumY / points.size());
     }
 
     private List<Point> convexHull(List<Point> points) {
         if (points.size() < 3) return new ArrayList<>(points);
-
         List<Point> sorted = new ArrayList<>(points);
-        sorted.sort((a, b) -> {
-            int cmp = Double.compare(a.x, b.x);
-            return cmp != 0 ? cmp : Double.compare(a.y, b.y);
-        });
-
+        sorted.sort((a, b) -> Double.compare(a.x, b.x) != 0 ? Double.compare(a.x, b.x) : Double.compare(a.y, b.y));
         List<Point> lower = new ArrayList<>();
         for (Point p : sorted) {
-            while (lower.size() >= 2 && cross(lower.get(lower.size() - 2), lower.get(lower.size() - 1), p) <= 0) {
-                lower.remove(lower.size() - 1);
+            while (lower.size() >= 2 && cross(lower.get(lower.size()-2), lower.get(lower.size()-1), p) <= 0) {
+                lower.remove(lower.size()-1);
             }
             lower.add(p);
         }
-
         List<Point> upper = new ArrayList<>();
-        for (int i = sorted.size() - 1; i >= 0; i--) {
+        for (int i = sorted.size()-1; i >= 0; i--) {
             Point p = sorted.get(i);
-            while (upper.size() >= 2 && cross(upper.get(upper.size() - 2), upper.get(upper.size() - 1), p) <= 0) {
-                upper.remove(upper.size() - 1);
+            while (upper.size() >= 2 && cross(upper.get(upper.size()-2), upper.get(upper.size()-1), p) <= 0) {
+                upper.remove(upper.size()-1);
             }
             upper.add(p);
         }
-
-        lower.remove(lower.size() - 1);
-        upper.remove(upper.size() - 1);
+        lower.remove(lower.size()-1);
+        upper.remove(upper.size()-1);
         lower.addAll(upper);
         return lower;
     }
 
     private double cross(Point o, Point a, Point b) {
         return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    }
+
+    private Point getCliqueCenter(Set<Integer> clique) {
+        double sumX = 0, sumY = 0;
+        for (int node : clique) {
+            Point p = nodePositions.get(node);
+            sumX += p.x; sumY += p.y;
+        }
+        return new Point(sumX / clique.size(), sumY / clique.size());
+    }
+
+    private double getCliqueRadius(Set<Integer> clique, Point center) {
+        double maxDist = 0;
+        for (int node : clique) {
+            Point p = nodePositions.get(node);
+            double dist = Math.sqrt(Math.pow(p.x - center.x, 2) + Math.pow(p.y - center.y, 2));
+            maxDist = Math.max(maxDist, dist);
+        }
+        return maxDist + 25;
     }
 
     public static void main(String[] args) {
